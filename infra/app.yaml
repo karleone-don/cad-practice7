@@ -1,20 +1,38 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: ECS Stack for Practice 7
+Description: 'Practice 7 - Simple ECS Stack with OIDC'
 
 Parameters:
   ImageTag:
     Type: String
-    Description: Tag of the Docker image to deploy
+    Description: 'Git Commit SHA for the Docker image'
+  SubnetId1:
+    Type: AWS::EC2::Subnet::Id
+  SubnetId2:
+    Type: AWS::EC2::Subnet::Id
 
 Resources:
-  # 1. ECS Cluster
-  MyCluster:
+  # 1. Роль для выполнения задач (чтобы ECS мог тянуть образ из ECR)
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
+
+  # 2. Кластер ECS
+  Cluster:
     Type: AWS::ECS::Cluster
     Properties:
       ClusterName: cad-p7-cluster
 
-  # 2. Task Definition (Описание того, как запускать контейнер)
-  MyTaskDefinition:
+  # 3. Определение задачи (Task Definition)
+  TaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
       Family: cad-p7-task
@@ -23,28 +41,24 @@ Resources:
         - FARGATE
       Cpu: '256'
       Memory: '512'
-      # Роль для выполнения задачи (должна существовать в аккаунте, обычно создается автоматически при первом использовании ECS)
-      ExecutionRoleArn: !Sub "arn:aws:iam::${AWS::AccountId}:role/ecsTaskExecutionRole"
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
       ContainerDefinitions:
-        - Name: web-app
-          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/cad-p7-repo:${ImageTag}"
+        - Name: web
+          Image: !Sub '278387431573.dkr.ecr.eu-north-1.amazonaws.com/cad-p7-repo:${ImageTag}'
           PortMappings:
             - ContainerPort: 80
-              Protocol: tcp
 
-  # 3. ECS Service (Запускает задачи)
-  MyService:
+  # 4. Сервис (запускает задачу)
+  Service:
     Type: AWS::ECS::Service
     Properties:
-      Cluster: !Ref MyCluster
-      TaskDefinition: !Ref MyTaskDefinition
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref TaskDefinition
       DesiredCount: 1
       LaunchType: FARGATE
       NetworkConfiguration:
         AwsvpcConfiguration:
-          # ВАЖНО: Здесь мы используем Default VPC. 
-          # Тебе нужно будет заменить эти Subnet IDs на свои из Default VPC!
           Subnets:
-            - subnet-xxxxxxx1 
-            - subnet-xxxxxxx2
+            - subnet-033feec45846084e3
+            - subnet-08885071cbbb5ea08
           AssignPublicIp: ENABLED
