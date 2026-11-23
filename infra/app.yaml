@@ -1,17 +1,45 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Practice 7 - Simple ECS Stack with OIDC'
+Description: 'Practice 7 - ECS Stack with OIDC and Auto-created ECR'
 
 Parameters:
   ImageTag:
     Type: String
     Description: 'Git Commit SHA for the Docker image'
+    Default: 'latest'
   SubnetId1:
     Type: AWS::EC2::Subnet::Id
+    Description: 'First public subnet'
   SubnetId2:
     Type: AWS::EC2::Subnet::Id
+    Description: 'Second public subnet'
 
 Resources:
-  # 1. Роль для выполнения задач (чтобы ECS мог тянуть образ из ECR)
+  # 1. Создаем ECR репозиторий автоматически
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: cad-p7-repo
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Expire images older than 14 days",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "sinceImagePushed",
+                  "countUnit": "days",
+                  "countNumber": 14
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+
+  # 2. Роль для выполнения задач
   ECSTaskExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -25,13 +53,13 @@ Resources:
       ManagedPolicyArns:
         - 'arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
 
-  # 2. Кластер ECS
+  # 3. Кластер ECS
   Cluster:
     Type: AWS::ECS::Cluster
     Properties:
       ClusterName: cad-p7-cluster
 
-  # 3. Определение задачи (Task Definition)
+  # 4. Определение задачи
   TaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
@@ -44,11 +72,12 @@ Resources:
       ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
       ContainerDefinitions:
         - Name: web
-          Image: !Sub '278387431573.dkr.ecr.eu-north-1.amazonaws.com/cad-p7-repo:${ImageTag}'
+          # Используем динамический адрес созданного репозитория
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepository}:${ImageTag}'
           PortMappings:
             - ContainerPort: 80
 
-  # 4. Сервис (запускает задачу)
+  # 5. Сервис
   Service:
     Type: AWS::ECS::Service
     Properties:
@@ -59,6 +88,6 @@ Resources:
       NetworkConfiguration:
         AwsvpcConfiguration:
           Subnets:
-            - subnet-033feec45846084e3
-            - subnet-08885071cbbb5ea08
+            - !Ref SubnetId1
+            - !Ref SubnetId2
           AssignPublicIp: ENABLED

@@ -5,7 +5,7 @@ on:
     branches: [ main ]
 
 permissions:
-  id-token: write # Обязательно для OIDC
+  id-token: write
   contents: read
 
 jobs:
@@ -27,5 +27,6 @@ jobs:
           aws cloudformation deploy \
             --template-file infra/app.yaml \
             --stack-name cad-practice7-stack \
+            --parameter-overrides ImageTag=$GITHUB_SHA SubnetId1=subnet-033feec45846084e3 SubnetId2=subnet-08885071cbbb5ea08 \
             --capabilities CAPABILITY_IAM \
             --no-fail-on-empty-changeset
