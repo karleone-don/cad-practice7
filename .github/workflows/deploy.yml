@@ -11,7 +11,7 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -22,7 +22,28 @@ jobs:
           role-to-assume: ${{ vars.DEPLOY_ROLE_ARN }}
           aws-region: eu-north-1
 
-      - name: Deploy CloudFormation Stack
+      - name: Create base infrastructure if needed
+        run: |
+          aws cloudformation deploy \
+            --template-file infra/app.yaml \
+            --stack-name cad-practice7-stack \
+            --parameter-overrides ImageTag=latest SubnetId1=subnet-033feec45846084e3 SubnetId2=subnet-08885071cbbb5ea08 \
+            --capabilities CAPABILITY_IAM \
+            --no-fail-on-empty-changeset
+
+      - name: Login to Amazon ECR
+        run: |
+          aws ecr get-login-password --region eu-north-1 | docker login \
+            --username AWS \
+            --password-stdin 278387431573.dkr.ecr.eu-north-1.amazonaws.com
+
+      - name: Build and push Docker image
+        run: |
+          IMAGE_URI=278387431573.dkr.ecr.eu-north-1.amazonaws.com/cad-p7-repo:$GITHUB_SHA
+          docker build -t $IMAGE_URI .
+          docker push $IMAGE_URI
+
+      - name: Deploy CloudFormation Stack with new image tag
         run: |
           aws cloudformation deploy \
             --template-file infra/app.yaml \
