@@ -15,7 +15,7 @@ env:
   STACK_NAME: cad-practice7-stack
   SUBNET_1: subnet-033feec45846084e3
   SUBNET_2: subnet-08885071cbbb5ea08
-  VPC_ID: vpc-xxxxxxxxxxxxxxxxx
+  VPC_ID: vpc-xxxxxxxxxxxxxxxxx   # <-- ЗАМЕНИ на свой VPC ID!
 
 jobs:
   deploy:
@@ -38,15 +38,11 @@ jobs:
 
       - name: Run tests if tests exist
         run: |
-          if [ -d tests ]; then
-            pytest
-          else
-            echo "No tests directory found. Skipping pytest."
-          fi
+          if [ -d tests ]; then pytest; else echo "No tests directory. Skipping."; fi
 
       - name: Validate CloudFormation template
         run: |
-          cfn-lint infra/app.yaml
+          cfn-lint infra/app.yaml --non-zero-exit-code error
 
       - name: Configure AWS Credentials with OIDC
         uses: aws-actions/configure-aws-credentials@v4
@@ -54,16 +50,11 @@ jobs:
           role-to-assume: ${{ vars.DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Create ECR repository first
+      - name: Create ECR repository if it does not exist
         run: |
-          aws ecr describe-repositories \
-            --repository-names "$ECR_REPOSITORY" \
-            --region "$AWS_REGION" || \
-          aws ecr create-repository \
-            --repository-name "$ECR_REPOSITORY" \
-            --image-tag-mutability IMMUTABLE \
-            --image-scanning-configuration scanOnPush=true \
-            --region "$AWS_REGION"
+          aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" || \
+          aws ecr create-repository --repository-name "$ECR_REPOSITORY" \
+            --image-scanning-configuration scanOnPush=true
 
       - name: Login to Amazon ECR
         run: |
@@ -88,13 +79,11 @@ jobs:
               VpcId="$VPC_ID" \
               SubnetId1="$SUBNET_1" \
               SubnetId2="$SUBNET_2" \
-            --capabilities CAPABILITY_NAMED_IAM \
+            --capabilities CAPABILITY_IAM \
             --no-fail-on-empty-changeset
 
-      - name: Show deployed image tag
+      - name: Show stack outputs
         run: |
           echo "Deployed image: $IMAGE_URI"
-          aws cloudformation describe-stacks \
-            --stack-name "$STACK_NAME" \
-            --query "Stacks[0].Outputs" \
-            --output table
+          aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs" --output table
