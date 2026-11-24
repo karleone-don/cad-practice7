@@ -15,7 +15,7 @@ env:
   STACK_NAME: cad-practice7-stack
   SUBNET_1: subnet-033feec45846084e3
   SUBNET_2: subnet-08885071cbbb5ea08
-  VPC_ID: vpc-xxxxxxxxxxxxxxxxx   # <-- ЗАМЕНИ на свой VPC ID!
+  VPC_ID: vpc-07ce3cace54c6d6a3   # <-- ЗАМЕНИ на свой VPC ID!
 
 jobs:
   deploy:
