@@ -1,89 +1,117 @@
-name: Deploy to AWS
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Practice 7 - ECS Fargate stack deployed by GitHub Actions with OIDC'
 
-on:
-  push:
-    branches: [ main ]
+Parameters:
+  ImageTag:
+    Type: String
+    Description: Git commit SHA used as Docker image tag
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC where ECS Fargate task will run
+  SubnetId1:
+    Type: AWS::EC2::Subnet::Id
+    Description: First public subnet
+  SubnetId2:
+    Type: AWS::EC2::Subnet::Id
+    Description: Second public subnet
 
-permissions:
-  id-token: write
-  contents: read
+Resources:
+  ECSTaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SG for Practice 7 ECS Fargate task
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: Allow HTTPS outbound to ECR and CloudWatch Logs
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: Allow HTTP outbound
 
-env:
-  AWS_REGION: eu-north-1
-  AWS_ACCOUNT_ID: '278387431573'
-  ECR_REPOSITORY: cad-p7-repo
-  STACK_NAME: cad-practice7-stack
-  SUBNET_1: subnet-033feec45846084e3
-  SUBNET_2: subnet-08885071cbbb5ea08
-  VPC_ID: vpc-xxxxxxxxxxxxxxxxx   # <-- ЗАМЕНИ на свой VPC ID!
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
 
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: /ecs/cad-p7-task
+      RetentionInDays: 1
 
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: cad-p7-cluster
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: cad-p7-task
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: '256'
+      Memory: '512'
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: web
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/cad-p7-repo:${ImageTag}'
+          Essential: true
+          PortMappings:
+            - ContainerPort: 80
+              Protocol: tcp
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
 
-      - name: Install test and validation tools
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest cfn-lint
+  Service:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: cad-p7-service
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          Subnets:
+            - !Ref SubnetId1
+            - !Ref SubnetId2
+          SecurityGroups:
+            - !Ref ECSTaskSecurityGroup
+          AssignPublicIp: ENABLED
 
-      - name: Run tests if tests exist
-        run: |
-          if [ -d tests ]; then pytest; else echo "No tests directory. Skipping."; fi
-
-      - name: Validate CloudFormation template
-        run: |
-          cfn-lint infra/app.yaml --non-zero-exit-code error
-
-      - name: Configure AWS Credentials with OIDC
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.DEPLOY_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Create ECR repository if it does not exist
-        run: |
-          aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" || \
-          aws ecr create-repository --repository-name "$ECR_REPOSITORY" \
-            --image-scanning-configuration scanOnPush=true
-
-      - name: Login to Amazon ECR
-        run: |
-          aws ecr get-login-password --region "$AWS_REGION" | docker login \
-            --username AWS \
-            --password-stdin "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
-
-      - name: Build and push Docker image tagged with commit SHA
-        run: |
-          IMAGE_URI="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$GITHUB_SHA"
-          docker build -t "$IMAGE_URI" .
-          docker push "$IMAGE_URI"
-          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
-
-      - name: Deploy CloudFormation stack
-        run: |
-          aws cloudformation deploy \
-            --template-file infra/app.yaml \
-            --stack-name "$STACK_NAME" \
-            --parameter-overrides \
-              ImageTag="$GITHUB_SHA" \
-              VpcId="$VPC_ID" \
-              SubnetId1="$SUBNET_1" \
-              SubnetId2="$SUBNET_2" \
-            --capabilities CAPABILITY_IAM \
-            --no-fail-on-empty-changeset
-
-      - name: Show stack outputs
-        run: |
-          echo "Deployed image: $IMAGE_URI"
-          aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
-            --query "Stacks[0].Outputs" --output table
+Outputs:
+  ECSClusterName:
+    Value: !Ref Cluster
+  ECSServiceName:
+    Value: !GetAtt Service.Name
+  TaskDefinitionArn:
+    Value: !Ref TaskDefinition
+  ImageTagUsed:
+    Value: !Ref ImageTag

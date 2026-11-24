@@ -8,6 +8,15 @@ permissions:
   id-token: write
   contents: read
 
+env:
+  AWS_REGION: eu-north-1
+  AWS_ACCOUNT_ID: '278387431573'
+  ECR_REPOSITORY: cad-p7-repo
+  STACK_NAME: cad-practice7-stack
+  SUBNET_1: subnet-033feec45846084e3
+  SUBNET_2: subnet-08885071cbbb5ea08
+  VPC_ID: vpc-xxxxxxxxxxxxxxxxx   # <-- ЗАМЕНИ на свой VPC ID!
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -16,38 +25,65 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Configure AWS Credentials
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install test and validation tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest cfn-lint
+
+      - name: Run tests if tests exist
+        run: |
+          if [ -d tests ]; then pytest; else echo "No tests directory. Skipping."; fi
+
+      - name: Validate CloudFormation template
+        run: |
+          cfn-lint infra/app.yaml --non-zero-exit-code error
+
+      - name: Configure AWS Credentials with OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.DEPLOY_ROLE_ARN }}
-          aws-region: eu-north-1
+          aws-region: ${{ env.AWS_REGION }}
 
-      - name: Create base infrastructure if needed
+      - name: Create ECR repository if it does not exist
         run: |
-          aws cloudformation deploy \
-            --template-file infra/app.yaml \
-            --stack-name cad-practice7-stack \
-            --parameter-overrides ImageTag=latest SubnetId1=subnet-033feec45846084e3 SubnetId2=subnet-08885071cbbb5ea08 \
-            --capabilities CAPABILITY_IAM \
-            --no-fail-on-empty-changeset
+          aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" || \
+          aws ecr create-repository --repository-name "$ECR_REPOSITORY" \
+            --image-scanning-configuration scanOnPush=true
 
       - name: Login to Amazon ECR
         run: |
-          aws ecr get-login-password --region eu-north-1 | docker login \
+          aws ecr get-login-password --region "$AWS_REGION" | docker login \
             --username AWS \
-            --password-stdin 278387431573.dkr.ecr.eu-north-1.amazonaws.com
+            --password-stdin "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
 
-      - name: Build and push Docker image
+      - name: Build and push Docker image tagged with commit SHA
         run: |
-          IMAGE_URI=278387431573.dkr.ecr.eu-north-1.amazonaws.com/cad-p7-repo:$GITHUB_SHA
-          docker build -t $IMAGE_URI .
-          docker push $IMAGE_URI
+          IMAGE_URI="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$GITHUB_SHA"
+          docker build -t "$IMAGE_URI" .
+          docker push "$IMAGE_URI"
+          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
 
-      - name: Deploy CloudFormation Stack with new image tag
+      - name: Deploy CloudFormation stack
         run: |
           aws cloudformation deploy \
             --template-file infra/app.yaml \
-            --stack-name cad-practice7-stack \
-            --parameter-overrides ImageTag=$GITHUB_SHA SubnetId1=subnet-033feec45846084e3 SubnetId2=subnet-08885071cbbb5ea08 \
+            --stack-name "$STACK_NAME" \
+            --parameter-overrides \
+              ImageTag="$GITHUB_SHA" \
+              VpcId="$VPC_ID" \
+              SubnetId1="$SUBNET_1" \
+              SubnetId2="$SUBNET_2" \
             --capabilities CAPABILITY_IAM \
             --no-fail-on-empty-changeset
+
+      - name: Show stack outputs
+        run: |
+          echo "Deployed image: $IMAGE_URI"
+          aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs" --output table
